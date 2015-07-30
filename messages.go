@@ -17,8 +17,12 @@ package siesta
 
 import (
 	"bytes"
+	"encoding/binary"
 	"compress/gzip"
 	"io/ioutil"
+
+	"github.com/golang/snappy"
+	"fmt"
 )
 
 // CompressionCodec is a compression codec id used to distinguish various compression types.
@@ -158,7 +162,24 @@ func (md *Message) Read(decoder Decoder) *DecodingError {
 			md.Nested = messages
 		}
 	case CompressionSnappy:
-		panic("Not implemented yet")
+		{
+			if md.Value == nil {
+				return NewDecodingError(ErrNoDataToUncompress, reasonNoGzipData)
+			}
+			md.Value, err = snappyDecode(md.Value)
+
+			if err != nil {
+				return NewDecodingError(err, reasonMalformedGzipData)
+			}
+
+			messages, decodingErr := ReadMessageSet(NewBinaryDecoder(md.Value))
+
+			if decodingErr != nil {
+				fmt.Println(3)
+				return decodingErr
+			}
+			md.Nested = messages
+		}
 	case CompressionLZ4:
 		panic("Not implemented yet")
 	}
@@ -196,3 +217,37 @@ var (
 	reasonNoGzipData                    = "No data to uncompress for GZip encoded message"
 	reasonMalformedGzipData             = "Malformed GZip encoded message"
 )
+
+
+var snappyMagic = []byte{130, 83, 78, 65, 80, 80, 89, 0}
+
+// SnappyEncode encodes binary data
+func snappyEncode(src []byte) []byte {
+	return snappy.Encode(nil, src)
+}
+
+// SnappyDecode decodes snappy data
+func snappyDecode(src []byte) ([]byte, error) {
+	if bytes.Equal(src[:8], snappyMagic) {
+		var (
+			pos   = uint32(16)
+			max   = uint32(len(src))
+			dst   = make([]byte, 0, len(src))
+			chunk []byte
+			err   error
+		)
+		for pos < max {
+			size := binary.BigEndian.Uint32(src[pos : pos+4])
+			pos += 4
+
+			chunk, err = snappy.Decode(chunk, src[pos:pos+size])
+			if err != nil {
+				return nil, err
+			}
+			pos += size
+			dst = append(dst, chunk...)
+		}
+		return dst, nil
+	}
+	return snappy.Decode(nil, src)
+}
